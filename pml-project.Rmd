@@ -5,31 +5,31 @@ date: "28 de marzo de 2018"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r setup, include=FALSE, results = "hide"}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+Sys.setlocale(locale = "en_US.UTF-8")
 ```
 
 ## Summary
-The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment. 
+This project uses data from a Human Activity Recognition (HAR) project that tries 
+to classify how well does an individual do a given exercise
+(http://groupware.les.inf.puc-rio.br/har). Our goal is find a classifier model
+that predicts how well (the `classe` variable) the exercise was done.
 
-Your submission for the Peer Review portion should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-).
+This project uses 2 different models based on classification trees and random
+forests, finding out the latter to be a best fit for prediction.
 
-- Métodos de clasificación
-- Rattle -> Decission Trees, Random Forest
-- Matriz de confusión
+Additionally, a brief analysis on the random forest model is done, showing which predictors explain the most of the variability and how many of them give the better results.
 
-## Notes
+And finally, a 20-case testing data is used to predict the `classe` that each
+observation belongs to.
 
-The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment. 
+## Data Cleaning 
 
-```{r finalcode}
-library(caret)
-library(parallel)
-library(doParallel)
+First of all, we load the training data and the testing one, the latter being
+used as the quiz testing set.
 
-set.seed(12345)
-
-## Loading files
+```{r dataloading, cache = TRUE}
 download.file(
     "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
     "pml-training.csv", method = "curl")
@@ -39,64 +39,144 @@ download.file(
 
 training <- read.csv("pml-training.csv", 
                      na.strings  = c("", "NA", "#DIV/0!"))
-testing  <- read.csv("pml-testing.csv")
+quiz  <- read.csv("pml-testing.csv")
+```
 
-## Data preprocesing and cleaning
-### At least 50% of non-NA data available
+We clean the columns with a very high level of NA values (>=50%) as they
+won't be useful as predictors. Other descriptive columns as X, username, 
+measurement date/time and informational ones as new_window and num_window are
+also removed as predictors.
+
+```{r datacleaning, cache = TRUE}
+# At least 50% of non-NA data available
 training <- training[,colSums(!is.na(training))>=(nrow(training)*0.5)]
-### Pruning columns considered not useful as predictor
-### (X, username, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window)
+# Pruning columns considered not useful as predictors
 training <-training[, -c(1:7)]
+```
 
-## Subsetting training data into training and testing sets
+Analyzing which candidate predictors could have near-zero variance, we find no
+predictor that could be set apart using this criteria.
+
+```{r nzv}
+library(caret)
+nearZeroVar(training, saveMetrics = TRUE)
+```
+
+Finally, we'll be using `r ncol(training) - 1` predictors.
+
+## Subsetting data into training and test set
+
+As the `quiz` data can't be used as a testing set, we split 25% os the training
+data to be used as the testing set. We call this set as the `holdout` set since
+as we'll be using cross-validation, each training sample will be tested against
+the test sample of each of the folds.
+
+```{r setpartition, cache = TRUE}
+set.seed(12345)
+
+# Subsetting training data into training and testing sets
 inTraining <- createDataPartition(training$classe, p = 0.75, list = FALSE)
 trainset <- training[inTraining,]
-testset <- training[-inTraining,]
+holdout <- training[-inTraining,]
+```
 
-## Parallelizing
+This subsetting gives as for `r nrow(trainset)` observations for the training 
+set and `r nrow(holdout)` observations for the holdout one.
+
+### Parallelizing
+
+To increase training performance the `parallel` and `doParallel` packages were
+used as follows:
+
+```{r parallelsetup}
+library(parallel)
+library(doParallel)
 cluster <- makeCluster(detectCores()-1)
 registerDoParallel(cluster)
+```
 
 ## Classifying
-fitControl <- trainControl(method = "cv", 
-                           number = 5, 
-                           allowParallel = TRUE)
 
-m.rf <- train(classe~., 
-              method = "rf", 
-              data = trainset, 
-              trControl = fitControl)
+As for classifying methods, we'll be using classification trees and random 
+forests, both of them using 5-fold cross-validation. To build the model we'll
+use the `trainset` data and the `holdout` as the testing set to validate
+how good they fit the data not considered in building the model.
 
-m.rf.pca    <- train(classe~., data = trainset, method = "rf", preProcess = c("pca"))
-m.lda       <- train(classe~., data = trainset, method = "lda")
-m.lssvmPoly <- train(classe~., data = trainset, method = "lssvmPoly")
-m.nb        <- train(classe~., data = trainset, method = "nb")
-m.gamboost  <- train(classe~., data = trainset, method = "gamboost")
+```{r classifying, cache = TRUE}
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
 
+m.rf <- train(classe~., method = "rf", data = trainset, trControl = fitControl)
+m.rpart <- train(classe~., method = "rpart", data = trainset, trControl = fitControl)
 stopCluster(cluster)
 registerDoSEQ()
-
-## Prediction on testing
-p.rf <- predict(m.rf, testset)
-p.rf.pca <- predict(m.rf.pca, testset)
-p.lda <- predict(m.lda, testset)
-p.lssvmPoly <- predict(m.lssvmPoly, testset)
-p.nb <- predict(m.nb, testset)
-p.gamboost <- predict(m.gamboost, testset)
-## Cross-validation
-confusionMatrix(p.rf, testset$classe)
-
-## Classe predictions for testing data
-p.rf(m.rf, testing)
-
 ```
 
-## Including Plots
+Looking at the accuracy for the 5-fold cross-validation:
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r accuracy}
+m.rpart$results
+m.rf$results
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+We get a `r round(sort(m.rpart$results$Accuracy, decreasing = TRUE)[1]*100, digits = 2)`% accuracy
+for the classification tree and a 
+`r round(sort(m.rf$results$Accuracy, decreasing = TRUE)[1]*100, digits = 2)`%
+accuracy for the random forest method. As the latter gives us the best accuracy,
+we'll select this method for further predictions.
+
+Nevertheless, the confusion matrix for both methods using the `holdout` data
+as a best-fit evaluator confirms the random forest as the best model.
+
+```{r confmatrix.rpart}
+confusionMatrix(predict(m.rpart, holdout), holdout$classe)
+plot(predict(m.rpart, holdout), holdout$classe)
+```
+
+```{r confmatrix.rf}
+confusionMatrix(predict(m.rf, holdout), holdout$classe)
+plot(predict(m.rf, holdout), holdout$classe)
+```
+
+## The Random forest model
+
+```{r rfmodel}
+m.rf
+```
+The model summary shows that the best accuracy is about 
+`r round(sort(m.rf$results$Accuracy, decreasing = TRUE)[1]*100, digits = 2)`% 
+using `r m.rf$bestTune` variables (`mtry`)
+
+```{r rsp}
+plot(m.rf)
+```
+
+As for the predictor importance:
+
+```{r predictorimportance}
+library(randomForest)
+library(dplyr)
+pred_importance <- data.frame(
+                        predictor = setdiff(colnames(trainset), "classe"),
+                        importance=as.vector(importance(m.rf$finalModel))
+        )
+pred_importance <- arrange(pred_importance, importance)
+pred_importance$predictor <- factor(pred_importance$predictor,
+                                   levels=pred_importance$predictor)
+
+p <- ggplot(pred_importance, aes(x=predictor, weight=importance, fill=predictor))
+p <- p + geom_bar() + coord_flip()
+p <- p + ggtitle("Predictor Importance from Random Forest Fit")
+p <- p + xlab("Predictor") + ylab("Importance (Mean Decrease in Gini Index)")
+p <- p + scale_fill_discrete(name="Predictor")
+p + theme(axis.text.x=element_blank(),
+          axis.text.y=element_text(size=8),
+          axis.title=element_text(size=14),
+          plot.title=element_text(size=16),
+          legend.position = "none")
+```
+
+## Quiz prediction
+
+```{r quizprediction, cache = TRUE}
+predict(m.rf, quiz)
+```
