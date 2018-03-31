@@ -144,7 +144,8 @@ m.rf
 ```
 The model summary shows that the best accuracy is about 
 `r round(sort(m.rf$results$Accuracy, decreasing = TRUE)[1]*100, digits = 2)`% 
-using `r m.rf$bestTune` variables (`mtry`)
+using `r m.rf$bestTune` variables (`mtry`), so the OOB error would be about
+`r 1 - round(sort(m.rf$results$Accuracy, decreasing = TRUE)[1]*100, digits = 2)`%
 
 ```{r rsp}
 plot(m.rf)
